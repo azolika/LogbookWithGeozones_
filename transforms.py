@@ -107,7 +107,6 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
 
     def close_segment(arr_names: List[str], arr_addr: str, arr_dt: Optional[dt.datetime],
                       stay_seconds: Optional[int] = None) -> None:
-        """Lezár egy szegmenst és hozzáadja a táblához"""
         nonlocal active_dep_name, active_dep_addr, active_dep_dt, active_total_meters, active_total_duration_s
         if not active_dep_name:
             return
