@@ -64,12 +64,14 @@ def get_filtered_geozones():
         return st.session_state.geozones
     return [g for g in st.session_state.geozones if g.get("name") not in set(excluded_zone_names)]
 
-# --- RUN button ---
 merge_trips = st.checkbox(
     "Merge trips into zone-to-zone segments",
     value=False,  # alapértelmezett: nincs bepipálva
     help="If unchecked, all trips are shown (with zone names highlighted in red if applicable)."
 )
+
+# --- RUN button ---
+
 
 if st.button("▶️ RUN"):
     st.session_state["report_ready"] = True
