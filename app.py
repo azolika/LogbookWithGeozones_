@@ -4,8 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from fm_api import list_objects, list_geozones, find_trips
-from transforms import parse_iso, trips_to_zone_pairs
-from geoutils import geozones_for_point
+from transforms import parse_iso, trips_to_zone_pairs, format_address, geozones_for_point
 
 st.set_page_config(page_title="Logbook with geozones", page_icon="🗺️", layout="wide")
 st.title("Logbook with geozones")
@@ -66,6 +65,12 @@ def get_filtered_geozones():
     return [g for g in st.session_state.geozones if g.get("name") not in set(excluded_zone_names)]
 
 # --- RUN button ---
+merge_trips = st.checkbox(
+    "Merge trips into zone-to-zone segments",
+    value=False,  # alapértelmezett: nincs bepipálva
+    help="If unchecked, all trips are shown (with zone names highlighted in red if applicable)."
+)
+
 if st.button("▶️ RUN"):
     st.session_state["report_ready"] = True
 
@@ -77,32 +82,113 @@ if st.session_state.get("report_ready"):
         trips = find_trips(api_key, from_dt, to_dt, vehicle_id)
         filtered_geozones = get_filtered_geozones()
 
-        # ===== Trips-derived Logbook (zone-filtered pairs) only =====
-        trip_pairs = trips_to_zone_pairs(trips, filtered_geozones)
-        df_triplog = pd.DataFrame(trip_pairs)
-        if not df_triplog.empty:
-            for col in ["Departure at", "Arrival at"]:
-                df_triplog[col] = df_triplog[col].apply(
-                    lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if hasattr(x, "strftime") else ""
-                )
+        # Közös segédfüggvény
+        def fmt_hms(total_seconds: int | float | None) -> str:
+            s = int(total_seconds or 0)
+            h = s // 3600
+            m = (s % 3600) // 60
+            sec = s % 60
+            return f"{h:02d}:{m:02d}:{sec:02d}"
 
-            css = """
-            <style>
-            .tbl { width: 100%; border-collapse: collapse; font-size: 0.95rem; table-layout: fixed; }
-            .tbl th, .tbl td { border: 1px solid #e5e7eb; padding: 8px 10px; vertical-align: top; }
-            .tbl thead th { background: #f8fafc; text-align: left; }
-            .tbl td { line-height: 1.25; word-wrap: break-word; overflow-wrap: anywhere; }
-            .tbl td:nth-child(1), .tbl td:nth-child(3) { min-width: 280px; }
-            </style>
-            """.strip()
+        # ================================
+        # MODE 1 — Merge trips by geozones
+        # ================================
+        if merge_trips:
+            trip_pairs = trips_to_zone_pairs(trips, filtered_geozones)
+            df_log = pd.DataFrame(trip_pairs)
 
-            table_html = df_triplog.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
+            if not df_log.empty:
+                for col in ["Departure at", "Arrival at"]:
+                    df_log[col] = df_log[col].apply(
+                        lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if hasattr(x, "strftime") else ""
+                    )
 
-            st.subheader("Logbook with geozones")
-            st.markdown(css, unsafe_allow_html=True)
-            st.markdown(table_html, unsafe_allow_html=True)
+                css = """
+                <style>
+                .tbl { width: 100%; border-collapse: collapse; font-size: 0.95rem; table-layout: fixed; }
+                .tbl th, .tbl td { border: 1px solid #e5e7eb; padding: 8px 10px; vertical-align: top; }
+                .tbl thead th { background: #f8fafc; text-align: left; }
+                .tbl td { line-height: 1.25; word-wrap: break-word; overflow-wrap: anywhere; }
+                .tbl td:nth-child(1), .tbl td:nth-child(3) { min-width: 280px; }
+                </style>
+                """.strip()
+
+                table_html = df_log.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
+
+                st.subheader("Trips-derived Logbook (zone-filtered pairs)")
+                st.markdown(css, unsafe_allow_html=True)
+                st.markdown(table_html, unsafe_allow_html=True)
+            else:
+                st.info("No trips found for the selected period.")
+
+        # ================================
+        # MODE 2 — Show all trips (default)
+        # ================================
         else:
-            st.info("No trips found for the selected period.")
+            rows = []
+            for i, t in enumerate(trips):
+                start = t.get("trip_start", {}) or {}
+                end = t.get("trip_end", {}) or {}
+
+                s_lat, s_lon = start.get("latitude"), start.get("longitude")
+                e_lat, e_lon = end.get("latitude"), end.get("longitude")
+
+                start_zones = geozones_for_point(s_lat, s_lon, filtered_geozones)
+                end_zones = geozones_for_point(e_lat, e_lon, filtered_geozones)
+
+                start_address = format_address(start.get("address"))
+                end_address = format_address(end.get("address"))
+
+                # ha geozónában van, akkor pirossal
+                if start_zones:
+                    start_address = f"<b style='color:red'>{', '.join(start_zones)}</b> : {start_address}"
+                if end_zones:
+                    end_address = f"<b style='color:red'>{', '.join(end_zones)}</b> : {end_address}"
+
+                # Stay idő számítása
+                stay = ""
+                if i + 1 < len(trips):
+                    next_trip = trips[i + 1]
+                    cur_end = parse_iso(end.get("datetime"))
+                    next_start = parse_iso(next_trip.get("trip_start", {}).get("datetime"))
+                    if cur_end and next_start:
+                        delta = (next_start - cur_end).total_seconds()
+                        if delta > 0:
+                            stay = fmt_hms(delta)
+
+                rows.append({
+                    "Departure": start_address,
+                    "Departure at": parse_iso(start.get("datetime")),
+                    "Arrival": end_address,
+                    "Arrival at": parse_iso(end.get("datetime")),
+                    "Distance (km)": round((t.get("mileage") or 0) / 1000, 3),
+                    "Duration": fmt_hms(t.get("trip_duration")),
+                    "Stay (hh:mm:ss)": stay,
+                })
+
+            df_trips = pd.DataFrame(rows)
+            if not df_trips.empty:
+                for col in ["Departure at", "Arrival at"]:
+                    df_trips[col] = df_trips[col].apply(
+                        lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if hasattr(x, "strftime") else ""
+                    )
+
+                css = """
+                <style>
+                .tbl { width: 100%; border-collapse: collapse; font-size: 0.95rem; table-layout: fixed; }
+                .tbl th, .tbl td { border: 1px solid #e5e7eb; padding: 8px 10px; vertical-align: top; }
+                .tbl thead th { background: #f8fafc; text-align: left; }
+                .tbl td { line-height: 1.25; word-wrap: break-word; overflow-wrap: anywhere; }
+                .tbl td:nth-child(1), .tbl td:nth-child(3) { min-width: 280px; }
+                </style>
+                """.strip()
+                table_html = df_trips.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
+
+                st.subheader("All Trips (detailed view)")
+                st.markdown(css, unsafe_allow_html=True)
+                st.markdown(table_html, unsafe_allow_html=True)
+            else:
+                st.info("No trips found for the selected period.")
 
     except Exception as e:
         st.error(f"Error: {e}")
