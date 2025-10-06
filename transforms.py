@@ -63,9 +63,10 @@ def format_address(addr: Optional[Dict[str, Any]]) -> str:
 
 def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Zónából-zónába áthaladás sorok: az induló zónától a következő elért zónáig
-    MINDEN köztes trip távja és időtartama (trip_duration, másodperc) is összeadódik.
-    A Duration a végső táblában HH:MM:SS formátumban jelenik meg.
+    Creates zone-to-zone transition rows:
+    - Aggregates total distance and duration (from multiple trips)
+    - Adds "Stay (hh:mm:ss)" column showing how long the vehicle stayed
+      in the arrival zone before the next trip started (based on Trips API only)
     """
 
     def fmt_hms(total_seconds: float | int | None) -> str:
@@ -75,7 +76,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         sec = s % 60
         return f"{h:02d}:{m:02d}:{sec:02d}"
 
-    # Előkészítés: zónák felderítése minden triphez
+    # Előkészítés: trip -> zónák, idők, címek
     prepared: List[Dict[str, Any]] = []
     for t in trips:
         start = t.get("trip_start", {}) or {}
@@ -104,7 +105,9 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
     active_total_meters: float = 0.0
     active_total_duration_s: int = 0
 
-    def close_segment(arr_names: List[str], arr_addr: str, arr_dt: Optional[dt.datetime]) -> None:
+    def close_segment(arr_names: List[str], arr_addr: str, arr_dt: Optional[dt.datetime],
+                      stay_seconds: Optional[int] = None) -> None:
+        """Lezár egy szegmenst és hozzáadja a táblához"""
         nonlocal active_dep_name, active_dep_addr, active_dep_dt, active_total_meters, active_total_duration_s
         if not active_dep_name:
             return
@@ -114,7 +117,8 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
             "Arrival": f"<b style='color:red'>{', '.join(arr_names)}</b> : {arr_addr or ''}",
             "Arrival at": arr_dt,
             "Distance (km)": round((active_total_meters or 0.0) / 1000.0, 3),
-            "Duration (ignition on)": fmt_hms(active_total_duration_s),  # ÚJ: HH:MM:SS
+            "Duration": fmt_hms(active_total_duration_s),
+            "Stay (hh:mm:ss)": fmt_hms(stay_seconds) if stay_seconds is not None else "",
         })
         # reset
         active_dep_name = None
@@ -123,11 +127,10 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         active_total_meters = 0.0
         active_total_duration_s = 0
 
-    for item in prepared:
+    for idx, item in enumerate(prepared):
         trip = item["trip"]
         trip_meters = float(trip.get("mileage") or 0.0)
         trip_dur_s = int(trip.get("trip_duration") or 0)
-
         start_has_zone = bool(item["start_zones"])
         end_has_zone = bool(item["end_zones"])
 
@@ -139,17 +142,26 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
             active_total_meters = 0.0
             active_total_duration_s = 0
 
-        # Ha van aktív szegmens, MINDEN trip távolságát és idejét hozzáadjuk
+        # Ha van aktív szegmens, MINDEN trip távját és idejét hozzáadjuk
         if active_dep_name is not None:
             active_total_meters += trip_meters
             active_total_duration_s += trip_dur_s
 
-            # Ha zónában ér véget, lezárjuk a szegmenst
+            # Ha zónában ér véget, lezárjuk
             if end_has_zone:
-                close_segment(item["end_zones"], item["end_address"], item["end_dt"])
+                # Következő trip kezdete (stay kiszámításhoz)
+                stay_seconds = None
+                if idx + 1 < len(prepared):
+                    next_trip = prepared[idx + 1]
+                    if next_trip.get("start_dt") and item.get("end_dt"):
+                        delta = (next_trip["start_dt"] - item["end_dt"]).total_seconds()
+                        if delta > 0:
+                            stay_seconds = int(delta)
+
+                close_segment(item["end_zones"], item["end_address"], item["end_dt"], stay_seconds)
                 continue
 
-            # Ha közben újra zónából indul, innen új szegmens kezdődik
+            # Ha közben újra zónából indul (pl. másik zóna)
             if start_has_zone:
                 active_dep_name = ", ".join(item["start_zones"])
                 active_dep_addr = item["start_address"]
@@ -157,8 +169,9 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
                 active_total_meters = trip_meters
                 active_total_duration_s = trip_dur_s
 
-    # Nyitott, be nem fejezett szegmenst nem írunk ki
+    # Nyitott szegmens (nincs záró zóna) nem kerül be
     return rows
+
 
 
 
