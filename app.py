@@ -98,7 +98,7 @@ if st.session_state.get("report_ready"):
 
             table_html = df_triplog.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
 
-            st.subheader("Trips-derived Logbook (zone-filtered pairs)")
+            st.subheader("Logbook with geozones")
             st.markdown(css, unsafe_allow_html=True)
             st.markdown(table_html, unsafe_allow_html=True)
         else:
