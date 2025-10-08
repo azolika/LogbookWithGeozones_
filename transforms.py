@@ -1,8 +1,7 @@
-import datetime as dt
-from typing import List, Dict, Any
 from geoutils import geozones_for_point
 from datetime import timezone
-from typing import Optional
+import datetime as dt
+from typing import List, Dict, Any, Optional
 
 
 def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
@@ -36,16 +35,89 @@ def _combine_trips(group: List[Dict[str, Any]]) -> Dict[str, Any]:
         # bármi egyéb mezőt, ami kellhet, itt később hozzá lehet adni
     }
 
-def merge_short_trips(trips: List[Dict[str, Any]], min_minutes: int) -> List[Dict[str, Any]]:
+# transforms.py
+
+
+def merge_short_trips(
+    trips: List[Dict[str, Any]],
+    min_minutes: int = 0,
+    max_gap_minutes: int = 0,
+) -> List[Dict[str, Any]]:
     """
-    Az N percnél rövidebb trippeket és azokat, amelyek között 0 másodperc szünet van,
-    összevonja a szomszédosakkal.
+    Trip-összevonás két szabály szerint:
+      1) min_minutes: az ennél rövidebb trippeket a szomszédaikkal egyesíti
+      2) max_gap_minutes: ha két trip között a szünet <= küszöb, azokat összevonja
+         (pl. border crossing, rövid megálló). 0-val kikapcsolható.
+
+    Megjegyzések:
     - Időrendben dolgozik.
-    - Egy futó "rövid" csoportot a következő "nem rövid" trippel egyesít.
-    - Ha a lista végén marad "rövid" csoport, azt az előző elemmel fűzi egybe.
-    - Ha minden elem rövid, mindet egyetlen trip-pé fűzi.
-    min_minutes <= 0 esetén nem módosít.
+    - Az egymást érő (0 mp gap) trippeket automatikusan összevonja, ha max_gap_minutes >= 0.
     """
+    if not trips:
+        return trips
+
+    thr_s = max(0, int(min_minutes)) * 60
+    gap_thr_s = max(0, int(max_gap_minutes)) * 60
+
+    def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
+        if not ts:
+            return None
+        try:
+            if ts.endswith("Z"):
+                return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            obj = dt.datetime.fromisoformat(ts)
+            return obj if obj.tzinfo else obj.replace(tzinfo=dt.timezone.utc)
+        except Exception:
+            obj = dt.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+            return obj.replace(tzinfo=dt.timezone.utc)
+
+    def start_dt(t: Dict[str, Any]) -> Optional[dt.datetime]:
+        return parse_iso((t.get("trip_start") or {}).get("datetime"))
+
+    def end_dt(t: Dict[str, Any]) -> Optional[dt.datetime]:
+        return parse_iso((t.get("trip_end") or {}).get("datetime"))
+
+    def _combine(group: List[Dict[str, Any]]) -> Dict[str, Any]:
+        first, last = group[0], group[-1]
+        return {
+            "trip_start": first.get("trip_start") or {},
+            "trip_end":   last.get("trip_end") or {},
+            "mileage":    sum(float(x.get("mileage") or 0.0) for x in group),
+            "trip_duration": int(sum(int(x.get("trip_duration") or 0) for x in group)),
+            "trip_type":  last.get("trip_type") or first.get("trip_type") or "merged",
+        }
+
+    trips_sorted = sorted(trips, key=lambda t: start_dt(t) or dt.datetime.min.replace(tzinfo=dt.timezone.utc))
+    result: List[Dict[str, Any]] = []
+    group: List[Dict[str, Any]] = []
+
+    for t in trips_sorted:
+        dur = int(t.get("trip_duration") or 0)
+
+        if not group:
+            group = [t]
+            continue
+
+        prev = group[-1]
+        prev_end = end_dt(prev)
+        curr_start = start_dt(t)
+        gap_s = None
+        if prev_end and curr_start:
+            gap_s = int((curr_start - prev_end).total_seconds())
+
+        # ha rövid a trip VAGY a gap <= küszöb → megy a csoportba
+        if dur < thr_s or (gap_s is not None and gap_s <= gap_thr_s):
+            group.append(t)
+        else:
+            # lezárjuk az előző csoportot és új csoportot kezdünk
+            result.append(_combine(group))
+            group = [t]
+
+    if group:
+        result.append(_combine(group))
+
+    return result
+
     if not trips or min_minutes is None or min_minutes < 0:
         return trips
 

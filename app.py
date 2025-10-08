@@ -5,7 +5,13 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 from fm_api import list_objects, list_geozones, find_trips
 from transforms import parse_iso, trips_to_zone_pairs, format_address, geozones_for_point, merge_short_trips
+import math
 
+
+def round_nearest_int(x: float | int | None) -> int:
+    if x is None:
+        return 0
+    return int(math.floor(float(x) + 0.5))
 
 st.set_page_config(page_title="Logbook with geozones", page_icon="🗺️", layout="wide")
 st.title("Logbook with geozones")
@@ -15,34 +21,48 @@ with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("API key", type="password")
 
-    # --- Time zone selector (default: Austria) ---
-    tz_options = [
-        "Europe/Vienna",   # default
-        "Europe/Bucharest",
-        "Europe/Budapest",
-        "UTC",
-        "Europe/London",
-    ]
+    # Time zone
+    tz_options = ["Europe/Vienna", "Europe/Bucharest", "Europe/Budapest", "UTC", "Europe/London"]
     user_tz_name = st.selectbox("Time zone", options=tz_options, index=0, key="tz_select")
     user_tz = ZoneInfo(user_tz_name)
 
-    # --- Defaults in user's local time ---
+    # Defaults in user's local time
     now_local = dt.datetime.now(tz=user_tz)
-
-    # kezdőidő: 7 nappal ezelőtt 00:00 (helyi idő)
     default_from = (now_local - dt.timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-    # záróidő: MA 23:59 (helyi idő)
     default_to   = now_local.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    # Dátum/Idő inputok (helyi időben)
+    # Date/time inputs (local)
     from_date = st.date_input("From date", value=default_from.date(), key="from_date")
-    from_time = st.time_input("From time", value=default_from.time(),
-                              step=dt.timedelta(minutes=1), key="from_time")
+    from_time = st.time_input("From time", value=default_from.time(), step=dt.timedelta(minutes=1), key="from_time")
     to_date   = st.date_input("To date",   value=default_to.date(),   key="to_date")
-    to_time   = st.time_input("To time",   value=default_to.time(),
-                              step=dt.timedelta(minutes=1), key="to_time")
+    to_time   = st.time_input("To time",   value=default_to.time(),   step=dt.timedelta(minutes=1), key="to_time")
 
-# A felhasználó helyi idejében összeállítjuk, majd UTC-re konvertáljuk az API-hoz
+    # Merge toggles + thresholds
+    merge_trips = st.checkbox(
+        "Merge trips into zone-to-zone segments",
+        value=False,
+        help="If unchecked, all trips are shown (with zone names highlighted in red if applicable)."
+    )
+
+    raw_mode = st.checkbox(
+        "Show raw data (no rounding)",
+        value=False,
+        help="If checked, distances keep 3 decimals. If unchecked, distances are rounded to nearest whole km."
+    )
+
+    short_trip_minutes = st.number_input(
+        "Merge trips shorter than (minutes)",
+        min_value=0, max_value=120, value=0, step=1,
+        help="Trips shorter than this duration will be merged with adjacent trips. Set to 0 to disable."
+    )
+
+    stay_gap_minutes = st.number_input(
+        "Merge if stay between trips ≤ (minutes)",
+        min_value=0, max_value=120, value=15, step=1,
+        help="If the pause between two trips is ≤ this value, they will be merged (e.g., border crossings)."
+    )
+
+# Build local datetimes, then convert to UTC for the API
 from_dt_local = dt.datetime.combine(from_date, from_time).replace(tzinfo=user_tz)
 to_dt_local   = dt.datetime.combine(to_date,   to_time).replace(tzinfo=user_tz)
 from_dt = from_dt_local.astimezone(timezone.utc)
@@ -87,20 +107,7 @@ def get_filtered_geozones():
         return st.session_state.geozones
     return [g for g in st.session_state.geozones if g.get("name") not in set(excluded_zone_names)]
 
-merge_trips = st.checkbox(
-    "Merge trips into zone-to-zone segments",
-    value=False,  # alapértelmezett: nincs bepipálva
-    help="If unchecked, all trips are shown (with zone names highlighted in red if applicable)."
-)
-# --- Rövid tripek összevonási küszöb (percben) ---
-short_trip_minutes = st.number_input(
-    "Merge trips shorter than (minutes)",
-    min_value=0,
-    max_value=120,
-    value=0,
-    step=1,
-    help="Trips shorter than this duration will be merged with adjacent trips. Set to 0 to disable."
-)
+
 st.session_state["short_trip_minutes"] = short_trip_minutes
 
 
@@ -117,8 +124,13 @@ if st.session_state.get("report_ready"):
 
 
         trips = find_trips(api_key, from_dt, to_dt, vehicle_id)
+
         short_trip_minutes = int(st.session_state.get("short_trip_minutes", 3))  # 0 = kikapcsolva
-        trips = merge_short_trips(trips, short_trip_minutes)
+        trips = merge_short_trips(
+            trips,
+            min_minutes=int(short_trip_minutes),
+            max_gap_minutes=int(stay_gap_minutes),
+        )
 
         filtered_geozones = get_filtered_geozones()
 
@@ -138,9 +150,17 @@ if st.session_state.get("report_ready"):
             df_log = pd.DataFrame(trip_pairs)
 
             if not df_log.empty:
+                # helyi idő formázás
                 for col in ["Departure at", "Arrival at"]:
                     df_log[col] = df_log[col].apply(
-                        lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if hasattr(x, "strftime") else ""
+                        lambda x: x.astimezone(user_tz).strftime("%Y-%m-%d %H:%M:%S")
+                        if isinstance(x, dt.datetime) else ""
+                    )
+
+                # kerekítés, ha nem raw
+                if "Distance (km)" in df_log.columns and not raw_mode:
+                    df_log["Distance (km)"] = df_log["Distance (km)"].apply(
+                        lambda x: round_nearest_int(float(x)) if x not in (None, "") else 0
                     )
 
                 css = """
@@ -196,12 +216,15 @@ if st.session_state.get("report_ready"):
                         if delta > 0:
                             stay = fmt_hms(delta)
 
+                base_km = (t.get("mileage") or 0) / 1000.0
+                distance_value = (round(base_km, 3) if raw_mode else round_nearest_int(base_km))
+
                 rows.append({
                     "Departure": start_address,
                     "Departure at": parse_iso(start.get("datetime")),
                     "Arrival": end_address,
                     "Arrival at": parse_iso(end.get("datetime")),
-                    "Distance (km)": round((t.get("mileage") or 0) / 1000, 3),
+                    "Distance (km)": distance_value,
                     "Duration": fmt_hms(t.get("trip_duration")),
                     "Stay (hh:mm:ss)": stay,
                 })
