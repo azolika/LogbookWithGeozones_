@@ -2,9 +2,10 @@ import datetime as dt
 from datetime import timezone
 import pandas as pd
 import streamlit as st
-
+from zoneinfo import ZoneInfo
 from fm_api import list_objects, list_geozones, find_trips
 from transforms import parse_iso, trips_to_zone_pairs, format_address, geozones_for_point, merge_short_trips
+
 
 st.set_page_config(page_title="Logbook with geozones", page_icon="🗺️", layout="wide")
 st.title("Logbook with geozones")
@@ -13,17 +14,39 @@ st.title("Logbook with geozones")
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("API key", type="password")
-    now = dt.datetime.now(tz=timezone.utc)
-    default_from = (now - dt.timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-    default_to = now.replace(microsecond=0)
 
-    from_date = st.date_input("From date", value=default_from.date())
-    from_time = st.time_input("From time", value=default_from.time())
-    from_dt = dt.datetime.combine(from_date, from_time).replace(tzinfo=timezone.utc)
+    # --- Time zone selector (default: Austria) ---
+    tz_options = [
+        "Europe/Vienna",   # default
+        "Europe/Bucharest",
+        "Europe/Budapest",
+        "UTC",
+        "Europe/London",
+    ]
+    user_tz_name = st.selectbox("Time zone", options=tz_options, index=0, key="tz_select")
+    user_tz = ZoneInfo(user_tz_name)
 
-    to_date = st.date_input("To date", value=default_to.date())
-    to_time = st.time_input("To time", value=default_to.time())
-    to_dt = dt.datetime.combine(to_date, to_time).replace(tzinfo=timezone.utc)
+    # --- Defaults in user's local time ---
+    now_local = dt.datetime.now(tz=user_tz)
+
+    # kezdőidő: 7 nappal ezelőtt 00:00 (helyi idő)
+    default_from = (now_local - dt.timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # záróidő: MA 23:59 (helyi idő)
+    default_to   = now_local.replace(hour=23, minute=59, second=0, microsecond=0)
+
+    # Dátum/Idő inputok (helyi időben)
+    from_date = st.date_input("From date", value=default_from.date(), key="from_date")
+    from_time = st.time_input("From time", value=default_from.time(),
+                              step=dt.timedelta(minutes=1), key="from_time")
+    to_date   = st.date_input("To date",   value=default_to.date(),   key="to_date")
+    to_time   = st.time_input("To time",   value=default_to.time(),
+                              step=dt.timedelta(minutes=1), key="to_time")
+
+# A felhasználó helyi idejében összeállítjuk, majd UTC-re konvertáljuk az API-hoz
+from_dt_local = dt.datetime.combine(from_date, from_time).replace(tzinfo=user_tz)
+to_dt_local   = dt.datetime.combine(to_date,   to_time).replace(tzinfo=user_tz)
+from_dt = from_dt_local.astimezone(timezone.utc)
+to_dt   = to_dt_local.astimezone(timezone.utc)
 
 # --- Load lists after API key is entered ---
 if api_key and (not st.session_state.get("objects") or not st.session_state.get("geozones")):
@@ -74,7 +97,7 @@ short_trip_minutes = st.number_input(
     "Merge trips shorter than (minutes)",
     min_value=0,
     max_value=120,
-    value=3,
+    value=0,
     step=1,
     help="Trips shorter than this duration will be merged with adjacent trips. Set to 0 to disable."
 )
@@ -187,7 +210,8 @@ if st.session_state.get("report_ready"):
             if not df_trips.empty:
                 for col in ["Departure at", "Arrival at"]:
                     df_trips[col] = df_trips[col].apply(
-                        lambda x: x.strftime("%Y-%m-%d %H:%M:%S") if hasattr(x, "strftime") else ""
+                        lambda x: x.astimezone(user_tz).strftime("%Y-%m-%d %H:%M:%S") if isinstance(x,
+                                                                                                    dt.datetime) else ""
                     )
 
                 css = """

@@ -1,15 +1,25 @@
 import datetime as dt
-from datetime import timezone
 from typing import List, Dict, Any, Optional
 from geoutils import geozones_for_point
+from datetime import datetime, timezone
+from typing import Optional
+
 
 def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
+    if not ts:
+        return None
     try:
-        if ts and ts.endswith("Z"):
+        if ts.endswith("Z"):
             return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        return dt.datetime.fromisoformat(ts) if ts else None
+        dt_obj = dt.datetime.fromisoformat(ts)
+        # ha tz-naiv, tekintsük UTC-nek
+        if dt_obj.tzinfo is None:
+            dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+        return dt_obj
     except Exception:
-        return dt.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S") if ts else None
+        # utolsó fallback: tekintsük UTC-nek
+        dt_obj = dt.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
+        return dt_obj.replace(tzinfo=timezone.utc)
 
 def _combine_trips(group: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Egybefűz több, egymást követő tripet egyetlen trip-pé."""
@@ -28,14 +38,15 @@ def _combine_trips(group: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def merge_short_trips(trips: List[Dict[str, Any]], min_minutes: int) -> List[Dict[str, Any]]:
     """
-    Az N percnél rövidebb trippeket összevonja a szomszédosakkal.
+    Az N percnél rövidebb trippeket és azokat, amelyek között 0 másodperc szünet van,
+    összevonja a szomszédosakkal.
     - Időrendben dolgozik.
     - Egy futó "rövid" csoportot a következő "nem rövid" trippel egyesít.
     - Ha a lista végén marad "rövid" csoport, azt az előző elemmel fűzi egybe.
     - Ha minden elem rövid, mindet egyetlen trip-pé fűzi.
     min_minutes <= 0 esetén nem módosít.
     """
-    if not trips or min_minutes is None or min_minutes <= 0:
+    if not trips or min_minutes is None or min_minutes < 0:
         return trips
 
     thr_s = int(min_minutes) * 60
@@ -43,35 +54,43 @@ def merge_short_trips(trips: List[Dict[str, Any]], min_minutes: int) -> List[Dic
     def start_dt(t: Dict[str, Any]) -> Optional[dt.datetime]:
         return parse_iso((t.get("trip_start") or {}).get("datetime"))
 
+    def end_dt(t: Dict[str, Any]) -> Optional[dt.datetime]:
+        return parse_iso((t.get("trip_end") or {}).get("datetime"))
+
     trips_sorted = sorted(trips, key=lambda t: start_dt(t) or dt.datetime.min)
     result: List[Dict[str, Any]] = []
-    pending_short: List[Dict[str, Any]] = []
+    pending_group: List[Dict[str, Any]] = []
 
-    for t in trips_sorted:
+    for i, t in enumerate(trips_sorted):
         dur = int(t.get("trip_duration") or 0)
-        if dur < thr_s:
-            # gyűjtjük a rövid trippeket
-            pending_short.append(t)
+
+        # ha ez az első trip, mindig kezdünk vele
+        if not pending_group:
+            pending_group = [t]
             continue
 
-        # aktuális trip már nem rövid
-        if pending_short:
-            # rövid csoport + aktuális nem-rövid → egybe fűzzük
-            merged = _combine_trips(pending_short + [t])
-            result.append(merged)
-            pending_short = []
-        else:
-            result.append(t)
+        prev = pending_group[-1]
+        prev_end = end_dt(prev)
+        curr_start = start_dt(t)
+        gap_s = None
+        if prev_end and curr_start:
+            gap_s = (curr_start - prev_end).total_seconds()
 
-    # ha a végén maradt rövid csoport
-    if pending_short:
-        if result:
-            last_long = result.pop()
-            merged = _combine_trips([last_long] + pending_short)
+        # ha rövid vagy nulla szünet van az előzőhöz képest, vagy a trip rövid, akkor összevonjuk
+        if (gap_s is not None and gap_s <= 0) or dur < thr_s:
+            pending_group.append(t)
+            continue
+
+        # különben lezárjuk az eddigit és új csoportot kezdünk
+        if pending_group:
+            merged = _combine_trips(pending_group)
             result.append(merged)
-        else:
-            # minden trip rövid volt
-            result.append(_combine_trips(pending_short))
+        pending_group = [t]
+
+    # maradék lezárása
+    if pending_group:
+        merged = _combine_trips(pending_group)
+        result.append(merged)
 
     return result
 
