@@ -49,7 +49,6 @@ with st.sidebar:
         value=False,
         help="If checked, distances keep 3 decimals. If unchecked, distances are rounded to nearest whole km."
     )
-
     short_trip_minutes = st.number_input(
         "Merge trips shorter than (minutes)",
         min_value=0, max_value=120, value=0, step=1,

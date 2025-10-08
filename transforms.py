@@ -171,7 +171,6 @@ def pair_out_in(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """OUT->IN párosítás; a zónanév + cím egyetlen mezőben: '<b style='color:red'>Zóna</b> : Cím'."""
     rows: List[Dict[str, Any]] = []
     pending_out: Optional[Dict[str, Any]] = None
-
     def zone_with_address(ev: Dict[str, Any]) -> str:
         name = ev.get("geozone_name") or ""
         addr = ev.get("geozone_address") or {}  # dict
