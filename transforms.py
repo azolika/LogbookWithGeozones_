@@ -35,6 +35,7 @@ def merge_short_trips(trips: List[Dict[str, Any]], min_minutes: int) -> List[Dic
     - Ha a lista végén marad "rövid" csoport, azt az előző elemmel fűzi egybe.
     - Ha minden elem rövid, mindet egyetlen trip-pé fűzi.
     min_minutes <= 0 esetén nem módosít.
+
     """
     if not trips or min_minutes is None or min_minutes <= 0:
         return trips
