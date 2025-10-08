@@ -1,7 +1,6 @@
 import datetime as dt
 from datetime import timezone
 from typing import List, Dict, Any, Optional
-
 from geoutils import geozones_for_point
 
 def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
