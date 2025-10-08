@@ -1,7 +1,7 @@
 import datetime as dt
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from geoutils import geozones_for_point
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Optional
 
 
