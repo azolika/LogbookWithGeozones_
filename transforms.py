@@ -1,6 +1,6 @@
 import datetime as dt
 from datetime import timezone
-from typing import Any, Dict, List, Optional
+from typing import List, Dict, Any, Optional
 
 from geoutils import geozones_for_point
 
@@ -12,11 +12,70 @@ def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
     except Exception:
         return dt.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S") if ts else None
 
-# transforms.py – cseréld le a pair_out_in függvényt erre
+def _combine_trips(group: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Egybefűz több, egymást követő tripet egyetlen trip-pé."""
+    first, last = group[0], group[-1]
+    return {
+        # kezdő és záró blokkokat átvesszük az első/utolsóból
+        "trip_start": first.get("trip_start") or {},
+        "trip_end": last.get("trip_end") or {},
+        # összegezzük a számokat
+        "mileage": sum(float(t.get("mileage") or 0.0) for t in group),
+        "trip_duration": int(sum(int(t.get("trip_duration") or 0) for t in group)),
+        # típus: az utolsó (vagy "merged")
+        "trip_type": last.get("trip_type") or first.get("trip_type") or "merged",
+        # bármi egyéb mezőt, ami kellhet, itt később hozzá lehet adni
+    }
 
-# transforms.py
-from typing import Any, Dict, List, Optional
-import datetime as dt
+def merge_short_trips(trips: List[Dict[str, Any]], min_minutes: int) -> List[Dict[str, Any]]:
+    """
+    Az N percnél rövidebb trippeket összevonja a szomszédosakkal.
+    - Időrendben dolgozik.
+    - Egy futó "rövid" csoportot a következő "nem rövid" trippel egyesít.
+    - Ha a lista végén marad "rövid" csoport, azt az előző elemmel fűzi egybe.
+    - Ha minden elem rövid, mindet egyetlen trip-pé fűzi.
+    min_minutes <= 0 esetén nem módosít.
+    """
+    if not trips or min_minutes is None or min_minutes <= 0:
+        return trips
+
+    thr_s = int(min_minutes) * 60
+
+    def start_dt(t: Dict[str, Any]) -> Optional[dt.datetime]:
+        return parse_iso((t.get("trip_start") or {}).get("datetime"))
+
+    trips_sorted = sorted(trips, key=lambda t: start_dt(t) or dt.datetime.min)
+    result: List[Dict[str, Any]] = []
+    pending_short: List[Dict[str, Any]] = []
+
+    for t in trips_sorted:
+        dur = int(t.get("trip_duration") or 0)
+        if dur < thr_s:
+            # gyűjtjük a rövid trippeket
+            pending_short.append(t)
+            continue
+
+        # aktuális trip már nem rövid
+        if pending_short:
+            # rövid csoport + aktuális nem-rövid → egybe fűzzük
+            merged = _combine_trips(pending_short + [t])
+            result.append(merged)
+            pending_short = []
+        else:
+            result.append(t)
+
+    # ha a végén maradt rövid csoport
+    if pending_short:
+        if result:
+            last_long = result.pop()
+            merged = _combine_trips([last_long] + pending_short)
+            result.append(merged)
+        else:
+            # minden trip rövid volt
+            result.append(_combine_trips(pending_short))
+
+    return result
+
 
 def pair_out_in(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """OUT->IN párosítás; a zónanév + cím egyetlen mezőben: '<b style='color:red'>Zóna</b> : Cím'."""
@@ -45,8 +104,6 @@ def pair_out_in(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 })
                 pending_out = None
     return rows
-
-
 
 def format_address(addr: Optional[Dict[str, Any]]) -> str:
     if not addr:
@@ -171,8 +228,4 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
 
     # Nyitott szegmens (nincs záró zóna) nem kerül be
     return rows
-
-
-
-
 

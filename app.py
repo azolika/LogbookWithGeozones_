@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from fm_api import list_objects, list_geozones, find_trips
-from transforms import parse_iso, trips_to_zone_pairs, format_address, geozones_for_point
+from transforms import parse_iso, trips_to_zone_pairs, format_address, geozones_for_point, merge_short_trips
 
 st.set_page_config(page_title="Logbook with geozones", page_icon="🗺️", layout="wide")
 st.title("Logbook with geozones")
@@ -69,6 +69,17 @@ merge_trips = st.checkbox(
     value=False,  # alapértelmezett: nincs bepipálva
     help="If unchecked, all trips are shown (with zone names highlighted in red if applicable)."
 )
+# --- Rövid tripek összevonási küszöb (percben) ---
+short_trip_minutes = st.number_input(
+    "Merge trips shorter than (minutes)",
+    min_value=0,
+    max_value=120,
+    value=3,
+    step=1,
+    help="Trips shorter than this duration will be merged with adjacent trips. Set to 0 to disable."
+)
+st.session_state["short_trip_minutes"] = short_trip_minutes
+
 
 # --- RUN button ---
 
@@ -81,7 +92,11 @@ if st.session_state.get("report_ready"):
     try:
         st.markdown(f"### Vehicle: {vehicle_name}")
 
+
         trips = find_trips(api_key, from_dt, to_dt, vehicle_id)
+        short_trip_minutes = int(st.session_state.get("short_trip_minutes", 3))  # 0 = kikapcsolva
+        trips = merge_short_trips(trips, short_trip_minutes)
+
         filtered_geozones = get_filtered_geozones()
 
         # Közös segédfüggvény
