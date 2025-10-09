@@ -222,6 +222,16 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         sec = s % 60
         return f"{h:02d}:{m:02d}:{sec:02d}"
 
+    def parse_hms(hms: str | None) -> int:
+        """'HH:MM:SS' -> összes másodperc. Üres/None -> 0."""
+        if not hms or not isinstance(hms, str):
+            return 0
+        try:
+            h, m, s = hms.split(":")
+            return int(h) * 3600 + int(m) * 60 + int(s)
+        except Exception:
+            return 0
+
     # Előkészítés: trip -> zónák, idők, címek
     prepared: List[Dict[str, Any]] = []
     for t in trips:

@@ -21,23 +21,38 @@ with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("API key", type="password")
 
-    # Time zone
     tz_options = ["Europe/Vienna", "Europe/Bucharest", "Europe/Budapest", "UTC", "Europe/London"]
     user_tz_name = st.selectbox("Time zone", options=tz_options, index=0, key="tz_select")
     user_tz = ZoneInfo(user_tz_name)
 
-    # Defaults in user's local time
+    # --- Defaults in user's local time ---
     now_local = dt.datetime.now(tz=user_tz)
-    default_from = (now_local - dt.timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-    default_to   = now_local.replace(hour=23, minute=59, second=0, microsecond=0)
 
-    # Date/time inputs (local)
-    from_date = st.date_input("From date", value=default_from.date(), key="from_date")
-    from_time = st.time_input("From time", value=default_from.time(), step=dt.timedelta(minutes=1), key="from_time")
-    to_date   = st.date_input("To date",   value=default_to.date(),   key="to_date")
-    to_time   = st.time_input("To time",   value=default_to.time(),   step=dt.timedelta(minutes=1), key="to_time")
+    # Ha a fő részben járműváltás történt, itt állítjuk maira a dátumot, mielőtt a widgetek létrejönnek
+    if st.session_state.get("reset_dates_to_today"):
+        st.session_state["from_date"] = now_local.date()
+        st.session_state["from_time"] = dt.time(0, 0)  # 00:00
+        st.session_state["to_date"] = now_local.date()
+        st.session_state["to_time"] = dt.time(23, 59)  # 23:59
+        st.session_state["reset_dates_to_today"] = False
 
-    # Merge toggles + thresholds
+    # Ha még nincsenek inicializálva, állítsunk alapértéket (mai nap)
+    if "from_date" not in st.session_state:
+        st.session_state["from_date"] = now_local.date()
+    if "from_time" not in st.session_state:
+        st.session_state["from_time"] = dt.time(0, 0)
+    if "to_date" not in st.session_state:
+        st.session_state["to_date"] = now_local.date()
+    if "to_time" not in st.session_state:
+        st.session_state["to_time"] = dt.time(23, 59)
+
+    # Date/time inputs (local) – ezek már a session_state-ből kapják az értéket
+    from_date = st.date_input("From date", value=st.session_state["from_date"], key="from_date")
+    from_time = st.time_input("From time", value=st.session_state["from_time"], step=dt.timedelta(minutes=15),
+                              key="from_time")
+    to_date = st.date_input("To date", value=st.session_state["to_date"], key="to_date")
+    to_time = st.time_input("To time", value=st.session_state["to_time"], step=dt.timedelta(minutes=15), key="to_time")
+
     merge_trips = st.checkbox(
         "Merge trips into zone-to-zone segments",
         value=False,
@@ -57,7 +72,7 @@ with st.sidebar:
 
     stay_gap_minutes = st.number_input(
         "Merge if stay between trips ≤ (minutes)",
-        min_value=0, max_value=120, value=15, step=1,
+        min_value=0, max_value=120, value=10, step=1,
         help="If the pause between two trips is ≤ this value, they will be merged (e.g., border crossings)."
     )
 
@@ -91,6 +106,12 @@ with col1:
     options = {o["name"]: o["id"] for o in st.session_state.objects}
     vehicle_name = st.selectbox("Select Vehicle", options=list(options.keys()))
     vehicle_id = options[vehicle_name]
+
+    # Ha új járműre váltott a user → kérjünk dátum-resetet és indítsunk rerun-t
+    if st.session_state.get("last_vehicle") != vehicle_id:
+        st.session_state["last_vehicle"] = vehicle_id
+        st.session_state["reset_dates_to_today"] = True
+        st.rerun()
 
 with col2:
     all_zone_names = [g["name"] for g in st.session_state.geozones]
@@ -141,6 +162,18 @@ if st.session_state.get("report_ready"):
             sec = s % 60
             return f"{h:02d}:{m:02d}:{sec:02d}"
 
+
+        def parse_hms(hms: str | None) -> int:
+            """'HH:MM:SS' → total seconds. Empty or None → 0."""
+            if not hms or not isinstance(hms, str):
+                return 0
+            try:
+                h, m, s = hms.split(":")
+                return int(h) * 3600 + int(m) * 60 + int(s)
+            except Exception:
+                return 0
+
+
         # ================================
         # MODE 1 — Merge trips by geozones
         # ================================
@@ -174,11 +207,25 @@ if st.session_state.get("report_ready"):
 
                 table_html = df_log.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
 
+                # --- Totals (aggregated view) ---
+                total_distance_val = float(pd.to_numeric(df_log["Distance (km)"], errors="coerce").fillna(0).sum())
+                total_distance_str = f"{total_distance_val:.3f}" if raw_mode else f"{round_nearest_int(total_distance_val)}"
+                total_travel_s = int(df_log["Duration"].fillna("").map(parse_hms).sum())
+                total_stay_s = int(df_log["Stay (hh:mm:ss)"].fillna("").map(parse_hms).sum())
+
+                summary_html = f"""
+                <div class="totals">Totals — Distance: <b>{total_distance_str} km</b> · Travel time: <b>{fmt_hms(total_travel_s)}</b> · Stop time: <b>{fmt_hms(total_stay_s)}</b></div>
+                <style>.totals{{margin-top:6px;}}</style>
+                """
+
+                # >>> EGY render blokk <<<
                 st.subheader("Trips-derived Logbook (zone-filtered pairs)")
                 st.markdown(css, unsafe_allow_html=True)
                 st.markdown(table_html, unsafe_allow_html=True)
+                st.markdown(summary_html, unsafe_allow_html=True)
             else:
                 st.info("No trips found for the selected period.")
+
 
         # ================================
         # MODE 2 — Show all trips (default)
@@ -247,9 +294,24 @@ if st.session_state.get("report_ready"):
                 """.strip()
                 table_html = df_trips.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
 
+                # --- Totals (detailed view) ---
+                # Distance: a táblában már a kerekített/nyers értékek vannak a checkbox szerint
+                total_distance_val = float(pd.to_numeric(df_trips["Distance (km)"], errors="coerce").fillna(0).sum())
+                total_distance_str = f"{total_distance_val:.3f}" if raw_mode else f"{round_nearest_int(total_distance_val)}"
+
+                total_travel_s = int(df_trips["Duration"].fillna("").map(parse_hms).sum())
+                total_stay_s = int(df_trips["Stay (hh:mm:ss)"].fillna("").map(parse_hms).sum())
+
+                summary_html = f"""
+                <div class="totals">Totals — Distance: <b>{total_distance_str} km</b> · Travel time: <b>{fmt_hms(total_travel_s)}</b> · Stop time: <b>{fmt_hms(total_stay_s)}</b></div>
+                <style>.totals{{margin-top:6px;}}</style>
+                """
+
                 st.subheader("All Trips (detailed view)")
                 st.markdown(css, unsafe_allow_html=True)
                 st.markdown(table_html, unsafe_allow_html=True)
+                st.markdown(summary_html, unsafe_allow_html=True)  # <-- ÚJ: összesítő sáv
+
             else:
                 st.info("No trips found for the selected period.")
 
