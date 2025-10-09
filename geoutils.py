@@ -2,6 +2,7 @@ import math
 from typing import Dict, List, Optional
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    # Earth's radius in meters
     R = 6371000.0
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -10,6 +11,7 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 def point_in_circle(lat: float, lon: float, circle: Dict) -> bool:
+    # Check if a point is inside a circle
     if not circle:
         return False
     c_lat = circle.get("latitude")
@@ -21,6 +23,7 @@ def point_in_circle(lat: float, lon: float, circle: Dict) -> bool:
 
 def point_in_polygon(lat: float, lon: float, polygon_coords: List[List[List[float]]]) -> bool:
     """Ray casting on first ring; coords are [[lon, lat], ...]."""
+    # Check if a point is inside a polygon (first ring only)
     if not polygon_coords or not polygon_coords[0]:
         return False
     ring = polygon_coords[0]
@@ -37,6 +40,7 @@ def point_in_polygon(lat: float, lon: float, polygon_coords: List[List[List[floa
 
 def geozones_for_point(lat: Optional[float], lon: Optional[float], geozones: List[Dict]) -> List[str]:
     """Return geozone names that contain the point."""
+    # Iterate through geozones and collect those containing the point
     if lat is None or lon is None:
         return []
     names: List[str] = []

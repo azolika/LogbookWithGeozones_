@@ -11,31 +11,29 @@ def parse_iso(ts: Optional[str]) -> Optional[dt.datetime]:
         if ts.endswith("Z"):
             return dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
         dt_obj = dt.datetime.fromisoformat(ts)
-        # ha tz-naiv, tekintsük UTC-nek
+        # if tz-naive, treat as UTC
         if dt_obj.tzinfo is None:
             dt_obj = dt_obj.replace(tzinfo=timezone.utc)
         return dt_obj
     except Exception:
-        # utolsó fallback: tekintsük UTC-nek
+        # last fallback: treat as UTC
         dt_obj = dt.datetime.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")
         return dt_obj.replace(tzinfo=timezone.utc)
 
 def _combine_trips(group: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Egybefűz több, egymást követő tripet egyetlen trip-pé."""
+    """Concatenate multiple consecutive trips into a single trip."""
     first, last = group[0], group[-1]
     return {
-        # kezdő és záró blokkokat átvesszük az első/utolsóból
+        # copy start/end blocks from the first/last trip
         "trip_start": first.get("trip_start") or {},
         "trip_end": last.get("trip_end") or {},
-        # összegezzük a számokat
+        # sum up numeric fields
         "mileage": sum(float(t.get("mileage") or 0.0) for t in group),
         "trip_duration": int(sum(int(t.get("trip_duration") or 0) for t in group)),
-        # típus: az utolsó (vagy "merged")
+        # type take from last (or "merged")
         "trip_type": last.get("trip_type") or first.get("trip_type") or "merged",
-        # bármi egyéb mezőt, ami kellhet, itt később hozzá lehet adni
+        # any other fields that may be needed can be added here later
     }
-
-# transforms.py
 
 
 def merge_short_trips(
@@ -44,14 +42,14 @@ def merge_short_trips(
     max_gap_minutes: int = 0,
 ) -> List[Dict[str, Any]]:
     """
-    Trip-összevonás két szabály szerint:
-      1) min_minutes: az ennél rövidebb trippeket a szomszédaikkal egyesíti
-      2) max_gap_minutes: ha két trip között a szünet <= küszöb, azokat összevonja
-         (pl. border crossing, rövid megálló). 0-val kikapcsolható.
+    Trip merging based on two rules:
+      1) min_minutes: trips shorter than this are merged with neighbors
+      2) max_gap_minutes: if the pause between two trips is ≤ threshold,
+         they are merged (e.g., border crossing, short stop). Set to 0 to disable.
 
-    Megjegyzések:
-    - Időrendben dolgozik.
-    - Az egymást érő (0 mp gap) trippeket automatikusan összevonja, ha max_gap_minutes >= 0.
+    Notes:
+    - Operates in chronological order.
+    - Back-to-back trips (0 sec gap) are automatically merged if max_gap_minutes >= 0.
     """
     if not trips:
         return trips
@@ -105,11 +103,11 @@ def merge_short_trips(
         if prev_end and curr_start:
             gap_s = int((curr_start - prev_end).total_seconds())
 
-        # ha rövid a trip VAGY a gap <= küszöb → megy a csoportba
+        # if the trip is short OR the gap <= threshold → keep in the current group
         if dur < thr_s or (gap_s is not None and gap_s <= gap_thr_s):
             group.append(t)
         else:
-            # lezárjuk az előző csoportot és új csoportot kezdünk
+            # close previous group and start a new one
             result.append(_combine(group))
             group = [t]
 
@@ -136,7 +134,7 @@ def merge_short_trips(
     for i, t in enumerate(trips_sorted):
         dur = int(t.get("trip_duration") or 0)
 
-        # ha ez az első trip, mindig kezdünk vele
+        # if this is the first trip, always start with it
         if not pending_group:
             pending_group = [t]
             continue
@@ -148,18 +146,18 @@ def merge_short_trips(
         if prev_end and curr_start:
             gap_s = (curr_start - prev_end).total_seconds()
 
-        # ha rövid vagy nulla szünet van az előzőhöz képest, vagy a trip rövid, akkor összevonjuk
+        # if there is a short or zero pause compared to the previous, or the trip is short, then merge
         if (gap_s is not None and gap_s <= 0) or dur < thr_s:
             pending_group.append(t)
             continue
 
-        # különben lezárjuk az eddigit és új csoportot kezdünk
+        # otherwise close the current group and start a new one
         if pending_group:
             merged = _combine_trips(pending_group)
             result.append(merged)
         pending_group = [t]
 
-    # maradék lezárása
+    # close remaining items
     if pending_group:
         merged = _combine_trips(pending_group)
         result.append(merged)
@@ -168,7 +166,7 @@ def merge_short_trips(
 
 
 def pair_out_in(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """OUT->IN párosítás; a zónanév + cím egyetlen mezőben: '<b style='color:red'>Zóna</b> : Cím'."""
+    """OUT->IN pairing; zone name + address in a single field: '<b style='color:red'>Zone</b> : Address'."""
     rows: List[Dict[str, Any]] = []
     pending_out: Optional[Dict[str, Any]] = None
     def zone_with_address(ev: Dict[str, Any]) -> str:
@@ -223,7 +221,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         return f"{h:02d}:{m:02d}:{sec:02d}"
 
     def parse_hms(hms: str | None) -> int:
-        """'HH:MM:SS' -> összes másodperc. Üres/None -> 0."""
+        """'HH:MM:SS' -> total seconds. Empty/None -> 0."""
         if not hms or not isinstance(hms, str):
             return 0
         try:
@@ -232,7 +230,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         except Exception:
             return 0
 
-    # Előkészítés: trip -> zónák, idők, címek
+    # Preparation: trip -> zones, times, addresses
     prepared: List[Dict[str, Any]] = []
     for t in trips:
         start = t.get("trip_start", {}) or {}
@@ -249,12 +247,12 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
             "end_address": format_address(end.get("address")),
         })
 
-    # Időrend
+    # Chronological order
     prepared.sort(key=lambda x: (x["start_dt"] or dt.datetime.min.replace(tzinfo=timezone.utc)))
 
     rows: List[Dict[str, Any]] = []
 
-    # Aktív szegmens állapot
+    # Active segment state
     active_dep_name: Optional[str] = None
     active_dep_addr: Optional[str] = None
     active_dep_dt: Optional[dt.datetime] = None
@@ -263,7 +261,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
 
     def close_segment(arr_names: List[str], arr_addr: str, arr_dt: Optional[dt.datetime],
                       stay_seconds: Optional[int] = None) -> None:
-        """Lezár egy szegmenst és hozzáadja a táblához"""
+        """Close a segment and append it to the table."""
         nonlocal active_dep_name, active_dep_addr, active_dep_dt, active_total_meters, active_total_duration_s
         if not active_dep_name:
             return
@@ -290,7 +288,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
         start_has_zone = bool(item["start_zones"])
         end_has_zone = bool(item["end_zones"])
 
-        # Szegmens nyitása, ha zónából indul
+        # Open a segment if departing from a zone
         if active_dep_name is None and start_has_zone:
             active_dep_name = ", ".join(item["start_zones"])
             active_dep_addr = item["start_address"]
@@ -298,14 +296,14 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
             active_total_meters = 0.0
             active_total_duration_s = 0
 
-        # Ha van aktív szegmens, MINDEN trip távját és idejét hozzáadjuk
+        # If there is an active segment, add EVERY trip's distance and time
         if active_dep_name is not None:
             active_total_meters += trip_meters
             active_total_duration_s += trip_dur_s
 
-            # Ha zónában ér véget, lezárjuk
+            # If it ends in a zone, close the segment
             if end_has_zone:
-                # Következő trip kezdete (stay kiszámításhoz)
+                # Next trip start (to compute stay)
                 stay_seconds = None
                 if idx + 1 < len(prepared):
                     next_trip = prepared[idx + 1]
@@ -317,7 +315,7 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
                 close_segment(item["end_zones"], item["end_address"], item["end_dt"], stay_seconds)
                 continue
 
-            # Ha közben újra zónából indul (pl. másik zóna)
+            # If along the way it starts again from a zone (e.g., another zone)
             if start_has_zone:
                 active_dep_name = ", ".join(item["start_zones"])
                 active_dep_addr = item["start_address"]
@@ -325,6 +323,5 @@ def trips_to_zone_pairs(trips: List[Dict[str, Any]], geozones: List[Dict[str, An
                 active_total_meters = trip_meters
                 active_total_duration_s = trip_dur_s
 
-    # Nyitott szegmens (nincs záró zóna) nem kerül be
+    # Open segment (no closing zone) is not included
     return rows
-

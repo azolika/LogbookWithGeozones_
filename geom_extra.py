@@ -4,8 +4,8 @@ from typing import List, Tuple
 
 def polygon_centroid_lonlat(first_ring: List[List[float]]) -> Tuple[float, float]:
     """
-    Centroid GeoJSON-gyűrűre (első gyűrű), ami [ [lon,lat], ... ] koordinátákat tartalmaz.
-    Visszatérés: (lat, lon)
+    Centroid for a GeoJSON ring (first ring) containing [ [lon, lat], ... ] coordinates.
+    Returns: (lat, lon)
     """
     ring = first_ring
     n = len(ring)
@@ -15,7 +15,7 @@ def polygon_centroid_lonlat(first_ring: List[List[float]]) -> Tuple[float, float
         lon, lat = ring[0]
         return (lat, lon)
 
-    # Ha a gyűrű nincs lezárva, zárjuk le
+    # If the ring is not closed, close it
     if ring[0] != ring[-1]:
         ring = ring + [ring[0]]
         n += 1
@@ -32,7 +32,7 @@ def polygon_centroid_lonlat(first_ring: List[List[float]]) -> Tuple[float, float
         Cy += (y1 + y2) * cross
 
     if A == 0.0:
-        # degenerált eset: vissza az első pont
+        # Degenerate case: return the first point
         lon, lat = ring[0]
         return (lat, lon)
 

@@ -5,6 +5,7 @@ import requests
 FM_API_BASE = "https://api.fm-track.com"
 
 def _get(url: str, api_key: str, params: Optional[Dict[str, Any]] = None) -> requests.Response:
+    # Add API key and version if not present, then send a GET request
     params = dict(params or {})
     params["api_key"] = api_key
     if "version=" not in url and "version" not in params:
@@ -13,11 +14,13 @@ def _get(url: str, api_key: str, params: Optional[Dict[str, Any]] = None) -> req
     return requests.get(url, params=params, headers=headers, timeout=60)
 
 def _post(url: str, api_key: str, payload: Dict[str, Any]) -> requests.Response:
+    # Send a POST request with API key and version
     params = {"api_key": api_key, "version": 1}
     headers = {"Content-Type": "application/json"}
     return requests.post(url, params=params, json=payload, headers=headers, timeout=60)
 
 def list_objects(api_key: str, limit: int = 500) -> List[Dict[str, Any]]:
+    # Retrieve a list of objects from the FM API
     resp = _get(f"{FM_API_BASE}/objects", api_key, params={"limit": limit})
     if resp.status_code != 200:
         raise RuntimeError(f"Objects GET failed: {resp.status_code} - {resp.text}")
@@ -39,6 +42,7 @@ def list_geozones(api_key: str, limit: int = 500) -> List[Dict[str, Any]]:
         page_items = data.get("items", []) or []
         items.extend(page_items)
         ct = data.get("continuation_token", 0)
+        # Stop if no continuation token or no more items
         if not ct or len(page_items) == 0:
             break
         continuation_token = ct
@@ -49,6 +53,7 @@ def find_geozone_visits(api_key: str,
                         to_dt: dt.datetime,
                         object_id: str,
                         geozone_ids: List[str]) -> Dict[str, Any]:
+    # Find geozone visits for a specific object within a time range
     if not geozone_ids:
         raise ValueError("At least one geozone id required")
     payload = {
@@ -68,6 +73,7 @@ def find_trips(api_key: str,
                to_dt: dt.datetime,
                object_id: str,
                limit: int = 500) -> list[dict]:
+    # Retrieve trips for a specific object within a time range, handling pagination
     trips: List[Dict[str, Any]] = []
     continuation_token: Optional[str] = None
     while True:
@@ -83,6 +89,7 @@ def find_trips(api_key: str,
         data = resp.json()
         trips.extend(data.get("trips", []) or [])
         continuation_token = data.get("continuation_token")
+        # Stop if there is no continuation token
         if not continuation_token:
             break
     return trips

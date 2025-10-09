@@ -28,7 +28,7 @@ with st.sidebar:
     # --- Defaults in user's local time ---
     now_local = dt.datetime.now(tz=user_tz)
 
-    # Ha a fő részben járműváltás történt, itt állítjuk maira a dátumot, mielőtt a widgetek létrejönnek
+    # If the vehicle was changed in the main area, reset dates to today here before creating the widgets
     if st.session_state.get("reset_dates_to_today"):
         st.session_state["from_date"] = now_local.date()
         st.session_state["from_time"] = dt.time(0, 0)  # 00:00
@@ -36,7 +36,7 @@ with st.sidebar:
         st.session_state["to_time"] = dt.time(23, 59)  # 23:59
         st.session_state["reset_dates_to_today"] = False
 
-    # Ha még nincsenek inicializálva, állítsunk alapértéket (mai nap)
+    # If not initialized yet, set defaults (today)
     if "from_date" not in st.session_state:
         st.session_state["from_date"] = now_local.date()
     if "from_time" not in st.session_state:
@@ -46,7 +46,7 @@ with st.sidebar:
     if "to_time" not in st.session_state:
         st.session_state["to_time"] = dt.time(23, 59)
 
-    # Date/time inputs (local) – ezek már a session_state-ből kapják az értéket
+    # Date/time inputs (local) – these already receive values from session_state
     from_date = st.date_input("From date", value=st.session_state["from_date"], key="from_date")
     from_time = st.time_input("From time", value=st.session_state["from_time"], step=dt.timedelta(minutes=15),
                               key="from_time")
@@ -107,7 +107,7 @@ with col1:
     vehicle_name = st.selectbox("Select Vehicle", options=list(options.keys()))
     vehicle_id = options[vehicle_name]
 
-    # Ha új járműre váltott a user → kérjünk dátum-resetet és indítsunk rerun-t
+    # If the user switched to a new vehicle → request date reset and trigger rerun
     if st.session_state.get("last_vehicle") != vehicle_id:
         st.session_state["last_vehicle"] = vehicle_id
         st.session_state["reset_dates_to_today"] = True
@@ -132,8 +132,6 @@ st.session_state["short_trip_minutes"] = short_trip_minutes
 
 
 # --- RUN button ---
-
-
 if st.button("▶️ RUN"):
     st.session_state["report_ready"] = True
 
@@ -142,10 +140,9 @@ if st.session_state.get("report_ready"):
     try:
         st.markdown(f"### Vehicle: {vehicle_name}")
 
-
         trips = find_trips(api_key, from_dt, to_dt, vehicle_id)
 
-        short_trip_minutes = int(st.session_state.get("short_trip_minutes", 3))  # 0 = kikapcsolva
+        short_trip_minutes = int(st.session_state.get("short_trip_minutes", 3))  # 0 = disabled
         trips = merge_short_trips(
             trips,
             min_minutes=int(short_trip_minutes),
@@ -154,14 +151,13 @@ if st.session_state.get("report_ready"):
 
         filtered_geozones = get_filtered_geozones()
 
-        # Közös segédfüggvény
+        # Shared helper function
         def fmt_hms(total_seconds: int | float | None) -> str:
             s = int(total_seconds or 0)
             h = s // 3600
             m = (s % 3600) // 60
             sec = s % 60
             return f"{h:02d}:{m:02d}:{sec:02d}"
-
 
         def parse_hms(hms: str | None) -> int:
             """'HH:MM:SS' → total seconds. Empty or None → 0."""
@@ -173,7 +169,6 @@ if st.session_state.get("report_ready"):
             except Exception:
                 return 0
 
-
         # ================================
         # MODE 1 — Merge trips by geozones
         # ================================
@@ -182,14 +177,14 @@ if st.session_state.get("report_ready"):
             df_log = pd.DataFrame(trip_pairs)
 
             if not df_log.empty:
-                # helyi idő formázás
+                # Local time formatting
                 for col in ["Departure at", "Arrival at"]:
                     df_log[col] = df_log[col].apply(
                         lambda x: x.astimezone(user_tz).strftime("%Y-%m-%d %H:%M:%S")
                         if isinstance(x, dt.datetime) else ""
                     )
 
-                # kerekítés, ha nem raw
+                # Rounding if not in raw mode
                 if "Distance (km)" in df_log.columns and not raw_mode:
                     df_log["Distance (km)"] = df_log["Distance (km)"].apply(
                         lambda x: round_nearest_int(float(x)) if x not in (None, "") else 0
@@ -218,14 +213,13 @@ if st.session_state.get("report_ready"):
                 <style>.totals{{margin-top:6px;}}</style>
                 """
 
-                # >>> EGY render blokk <<<
+                # >>> Single render block <<<
                 st.subheader("Trips-derived Logbook (zone-filtered pairs)")
                 st.markdown(css, unsafe_allow_html=True)
                 st.markdown(table_html, unsafe_allow_html=True)
                 st.markdown(summary_html, unsafe_allow_html=True)
             else:
                 st.info("No trips found for the selected period.")
-
 
         # ================================
         # MODE 2 — Show all trips (default)
@@ -245,13 +239,13 @@ if st.session_state.get("report_ready"):
                 start_address = format_address(start.get("address"))
                 end_address = format_address(end.get("address"))
 
-                # ha geozónában van, akkor pirossal
+                # If inside a geozone, highlight in red
                 if start_zones:
                     start_address = f"<b style='color:red'>{', '.join(start_zones)}</b> : {start_address}"
                 if end_zones:
                     end_address = f"<b style='color:red'>{', '.join(end_zones)}</b> : {end_address}"
 
-                # Stay idő számítása
+                # Compute stay time
                 stay = ""
                 if i + 1 < len(trips):
                     next_trip = trips[i + 1]
@@ -295,7 +289,7 @@ if st.session_state.get("report_ready"):
                 table_html = df_trips.to_html(escape=False, index=False, border=0, classes="tbl").lstrip()
 
                 # --- Totals (detailed view) ---
-                # Distance: a táblában már a kerekített/nyers értékek vannak a checkbox szerint
+                # Distance: the table already contains rounded/raw values according to the checkbox
                 total_distance_val = float(pd.to_numeric(df_trips["Distance (km)"], errors="coerce").fillna(0).sum())
                 total_distance_str = f"{total_distance_val:.3f}" if raw_mode else f"{round_nearest_int(total_distance_val)}"
 
@@ -310,7 +304,7 @@ if st.session_state.get("report_ready"):
                 st.subheader("All Trips (detailed view)")
                 st.markdown(css, unsafe_allow_html=True)
                 st.markdown(table_html, unsafe_allow_html=True)
-                st.markdown(summary_html, unsafe_allow_html=True)  # <-- ÚJ: összesítő sáv
+                st.markdown(summary_html, unsafe_allow_html=True)  # <-- NEW: summary bar
 
             else:
                 st.info("No trips found for the selected period.")

@@ -5,7 +5,7 @@ from typing import Optional, Dict
 USER_AGENT = "cargotrack-logbook/1.0 (contact: it@cargotrack.ro)"
 
 def reverse_geocode(lat: float, lon: float) -> str:
-    """Visszaad egy display_name stringet (megmarad kompatibilitásnak)."""
+    """Returns a display_name string (kept for compatibility)."""
     try:
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {"lat": lat, "lon": lon, "format": "json", "zoom": 18, "addressdetails": 1}
@@ -18,8 +18,8 @@ def reverse_geocode(lat: float, lon: float) -> str:
 
 def reverse_geocode_struct(lat: float, lon: float) -> Dict[str, str]:
     """
-    Struktúrált cím (dict) a format_address() számára.
-    Kulcsok: country, region, locality, street, house_number, zip (ha elérhető).
+    Structured address (dict) for format_address().
+    Keys: country, region, locality, street, house_number, zip (if available).
     """
     try:
         url = "https://nominatim.openstreetmap.org/reverse"
@@ -30,7 +30,7 @@ def reverse_geocode_struct(lat: float, lon: float) -> Dict[str, str]:
         data = resp.json() or {}
         addr = data.get("address") or {}
 
-        # normalizálás a format_address kulcsaihoz
+        # normalization to match format_address keys
         return {
             "country": addr.get("country") or "",
             "region": addr.get("state") or addr.get("region") or "",
