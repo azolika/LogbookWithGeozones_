@@ -107,7 +107,7 @@ def merge_short_trips(
         if dur < thr_s or (gap_s is not None and gap_s <= gap_thr_s):
             group.append(t)
         else:
-            # close previous group and start a new one
+            # close the previous group and start a new one
             result.append(_combine(group))
             group = [t]
 

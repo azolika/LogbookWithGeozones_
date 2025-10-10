@@ -22,7 +22,7 @@ def point_in_circle(lat: float, lon: float, circle: Dict) -> bool:
     return haversine_m(lat, lon, c_lat, c_lon) <= float(r)
 
 def point_in_polygon(lat: float, lon: float, polygon_coords: List[List[List[float]]]) -> bool:
-    """Ray casting on first ring; coords are [[lon, lat], ...]."""
+    """Ray casting on the first ring; coords are [[lon, lat], ...]."""
     # Check if a point is inside a polygon (first ring only)
     if not polygon_coords or not polygon_coords[0]:
         return False
