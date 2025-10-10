@@ -48,26 +48,6 @@ def list_geozones(api_key: str, limit: int = 500) -> List[Dict[str, Any]]:
         continuation_token = ct
     return items
 
-def find_geozone_visits(api_key: str,
-                        from_dt: dt.datetime,
-                        to_dt: dt.datetime,
-                        object_id: str,
-                        geozone_ids: List[str]) -> Dict[str, Any]:
-    # Find geozone visits for a specific object within a time range
-    if not geozone_ids:
-        raise ValueError("At least one geozone id required")
-    payload = {
-        "continuation_token": 0,
-        "from_datetime": from_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "to_datetime": to_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "object_ids": [object_id],
-        "geozone_ids": geozone_ids
-    }
-    resp = _post(f"{FM_API_BASE}/geozones/visits", api_key, payload)
-    if resp.status_code != 200:
-        raise RuntimeError(f"Visits POST failed: {resp.status_code} - {resp.text}")
-    return resp.json()
-
 def find_trips(api_key: str,
                from_dt: dt.datetime,
                to_dt: dt.datetime,
